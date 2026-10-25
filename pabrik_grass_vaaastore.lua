@@ -1,14 +1,13 @@
-local SC = "AUTO PABRIK GRASS VaaaStore v2.0"
+local SC = "AUTO PABRIK GRASS VaaaStore v1.2"
 local C = {
-    plant_count   = 10,
+    plant_count   = 20,
     plant_offset  = 2,
     seed_name     = "Grass Seed",
     block_name    = "Grass",
     vend_name     = "Vending Machine",
     seed_id = nil, block_id = nil, vend_id = nil,
-    target_stock  = 190,
-    vend_cap      = 5000,
-    max_setor     = 26,
+    stack_cap     = 200,
+    manual_wait   = 60000,
     max_hits      = 12,
     delay_min     = 180,
     delay_max     = 300,
@@ -137,7 +136,7 @@ end
 local function fetch_floor(item)
     for _, o in pairs(getObjectList()) do
         if o.itemid == item then
-            if inv(item) >= 200 then return end
+            if inv(item) >= C.stack_cap then return end
             local ox, oy = obj_tile(o)
             if walk_to(ox, oy) then
                 collect()
@@ -164,7 +163,7 @@ local function banner_start()
         "`2VaaaStore - Pabrik rumput otomatis v2.0",
         "`oAlur: Plant > Fast Harvest Ready > Fast 3-Tile PNB > Sweep > Restock 190 Seed.",
         "`oPosisi awal: " .. home.x .. "," .. home.y,
-        "`oRestock dilakukan saat seed di tas = 200 (190 disetor, 10 sisa).",
+        "`oSetor Vending: setelah plant, saat seed di tas >= " .. (C.stack_cap - C.plant_count) .. " (seluruh seed di tas disetor).",
         "`9Mencari Vending baru secara otomatis jika yang sekarang sudah penuh."
     })
 end
@@ -225,32 +224,37 @@ local function plant_phase()
     return list
 end
 
-local function harvest_ready_tiles(list)
-    local harvested = 0
-    for _, p in ipairs(list) do
-        local t = tile(p.x, p.y)
-        if t and t.fg == ID.seed and t.readyharvest then
-            if walk_to(p.x, p.y) then
-                act(p.x, p.y, 18)
-                pause()
-                collect()
-                harvested = harvested + 1
-            end
-        end
-    end
-    return harvested
-end
-
 local function harvest_as_ready(list)
     log_hp("Menunggu & Panen Instan (Ready First)...")
-    local total = #list
-    local done = 0
+    local total, done, finished = #list, 0, {}
     local start_time = getTime()
     while done < total and RUN do
-        local count = harvest_ready_tiles(list)
-        done = done + count
+        for i, p in ipairs(list) do
+            if not finished[i] then
+                local t = tile(p.x, p.y)
+                if not t or t.fg ~= ID.seed then
+                    finished[i] = true
+                    done = done + 1
+                elseif t.readyharvest and walk_to(p.x, p.y) then
+                    act(p.x, p.y, 18)
+                    pause()
+                    collect()
+                    local cleared = wait_until(function()
+                        local g = tile(p.x, p.y)
+                        return g and (g.fg ~= ID.seed or not g.readyharvest)
+                    end, 800)
+                    if cleared then
+                        lag_ok()
+                        finished[i] = true
+                        done = done + 1
+                    else
+                        lag_bad()
+                    end
+                end
+            end
+        end
         if done >= total then break end
-        if getTime() - start_time > (C.grow_time_ms + 15000) then
+        if getTime() - start_time > (C.grow_time_ms + 15000 + total * 1500) then
             log_hp("Timeout menunggu tanaman panen.")
             break
         end
@@ -263,14 +267,23 @@ local function fast_pnb_3tiles()
     if inv(ID.block) <= 0 then return end
     walk_to(home.x, home.y)
     
+    local placed = {}
     for _, dx in ipairs(C.pnb_offsets) do
         local tx, ty = home.x + dx, home.y - 1
         local t = tile(tx, ty)
         if t and t.fg == 0 and inv(ID.block) > 0 then
             act(tx, ty, ID.block)
+            placed[#placed + 1] = {x = tx, y = ty}
             pause(80, 120)
         end
     end
+    wait_until(function()
+        for _, p in ipairs(placed) do
+            local g = tile(p.x, p.y)
+            if not g or g.fg ~= ID.block then return false end
+        end
+        return true
+    end, 800)
 
     local hits = 0
     while hits < C.max_hits and RUN do
@@ -323,7 +336,7 @@ local function sweep()
         if inv(ID.block) > 0 then pnb() end
         local block_left = inv(ID.block) + floor_total(ID.block)
         local seed_left = floor_total(ID.seed)
-        if block_left == 0 and (seed_left == 0 or inv(ID.seed) >= 200) then break end
+        if block_left == 0 and (seed_left == 0 or inv(ID.seed) >= C.stack_cap) then break end
     end
     walk_to(home.x, home.y)
 end
@@ -349,7 +362,7 @@ local function stand_near(vx, vy)
     local px, py = tile_pos()
     if math.abs(px - vx) <= 2 and math.abs(py - vy) <= 2 then return true end
     for _, d in ipairs({{-1, 0}, {1, 0}, {-2, 0}, {2, 0}, {0, -1}}) do
-        local x, y = vx + d[1], vx + d[2]
+        local x, y = vx + d[1], vy + d[2]
         local t = tile(x, y)
         if t and t.fg == 0 and walk_to(x, y) then return true end
     end
@@ -409,7 +422,7 @@ local function manual_restock(vx, vy, before)
     V.learning, V.rec, V.dlgs = true, {}, {}
     growtopia.notify("`2Setor seluruh seed ke Vending secara manual (script merekam paket)...")
     log_hp("MODE BELAJAR: Masukkan seed ke Vending secara manual...")
-    local ok = wait_until(function() return inv(ID.seed) < before end, 60000)
+    local ok = wait_until(function() return inv(ID.seed) < before end, C.manual_wait)
     V.learning = false
     if not ok then return false end
     local tpl = build_tpl(V.rec, vx, vy, ID.seed)
@@ -423,46 +436,33 @@ end
 local function restock()
     local vends = get_all_vendings()
     if #vends == 0 then return false, "Tidak ada Vending Machine ditemukan" end
+    local tpl = load_tpl()
+    local had_tpl = tpl ~= nil
 
     while current_vend_idx <= #vends do
-        local target_v = vends[current_vend_idx]
-        local vx, vy = target_v.x, target_v.y
-        log_hp("Mencoba setor ke Vending #" .. current_vend_idx .. " di (" .. vx .. "," .. vy .. ")")
-
-        if not stand_near(vx, vy) then
-            log_hp("Gagal mendekati Vending #" .. current_vend_idx .. ", mencoba Vending berikutnya...")
-            current_vend_idx = current_vend_idx + 1
+        local v = vends[current_vend_idx]
+        log_hp("Mencoba setor ke Vending #" .. current_vend_idx .. " di (" .. v.x .. "," .. v.y .. ")")
+        local ok = false
+        if not stand_near(v.x, v.y) then
+            log_hp("Gagal mendekati Vending #" .. current_vend_idx)
         else
             local before = inv(ID.seed)
-            local ok = false
-            local tpl = load_tpl()
-
-            if tpl then
-                ok = replay(tpl, vx, vy, before)
-                if not ok then
-                    log_hp("Restock otomatis via template gagal/vending penuh. Menghapus template.")
-                    pset("vend_tpl", "")
-                end
-            end
-
-            if not ok then
-                ok = manual_restock(vx, vy, before)
-            end
-
+            if tpl then ok = replay(tpl, v.x, v.y, before) else ok = manual_restock(v.x, v.y, before) end
             if ok then
                 local delta = before - inv(ID.seed)
                 stats.stocked = stats.stocked + delta
                 stats.setor_count = stats.setor_count + 1
+                if tpl then pset("vend_tpl_ok", 1) elseif load_tpl() then pset("vend_tpl_ok", 1) end
                 log_hp("Sukses setor " .. delta .. " seed ke Vending #" .. current_vend_idx)
                 walk_to(home.x, home.y)
                 return true
-            else
-                log_hp("Vending #" .. current_vend_idx .. " penuh/gagal, mencari Vending lain...")
-                current_vend_idx = current_vend_idx + 1
             end
+            log_hp("Vending #" .. current_vend_idx .. " penuh/gagal")
         end
+        current_vend_idx = current_vend_idx + 1
     end
 
+    if had_tpl and pget("vend_tpl_ok", 0) ~= 1 then pset("vend_tpl", "") end
     return false, "Semua Vending Machine di world sudah penuh/tidak bisa diakses"
 end
 
@@ -522,11 +522,23 @@ local function main()
 
     while RUN do
         if not same_world() then shutdown("keluar dari world " .. start_world) break end
+        if inv(ID.seed) <= 0 then fetch_floor(ID.seed) end
         if inv(ID.seed) <= 0 then shutdown("seed di tas habis") break end
 
         local list = {}
         guarded(function() list = plant_phase() end)
         if #list == 0 then shutdown("tidak ada tile tanam valid") break end
+
+        local limit = C.stack_cap - C.plant_count
+        if inv(ID.seed) >= limit then
+            log_hp("Seed di tas " .. inv(ID.seed) .. " (>= " .. limit .. ") setelah plant, setor Vending...")
+            local ok, why = false, ""
+            guarded(function() ok, why = restock() end)
+            if not ok then
+                shutdown(why ~= "" and why or "Gagal setor ke semua Vending Machine")
+                break
+            end
+        end
 
         guarded(function()
             harvest_as_ready(list)
@@ -537,17 +549,6 @@ local function main()
 
         stats.cycles = stats.cycles + 1
         log_hp("Siklus " .. stats.cycles .. " selesai. Seed di tas: " .. inv(ID.seed))
-
-        if inv(ID.seed) >= 200 then
-            log_hp("Seed di tas mencapai 200 (Siap Setor Vending)...")
-            local ok, why = false, ""
-            guarded(function() ok, why = restock() end)
-            if not ok then
-                shutdown(why ~= "" and why or "Gagal setor ke semua Vending Machine")
-                break
-            end
-        end
-
         pause(500, 1000)
     end
 end
