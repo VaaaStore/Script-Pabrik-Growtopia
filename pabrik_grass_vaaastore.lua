@@ -1,4 +1,4 @@
-local SC = "AUTO PABRIK GRASS VaaaStore v1.2"
+local SC = "AUTO PABRIK GRASS VaaaStore v4.0"
 local C = {
     plant_count   = 20,
     plant_offset  = 2,
@@ -8,6 +8,7 @@ local C = {
     seed_id = nil, block_id = nil, vend_id = nil,
     stack_cap     = 200,
     manual_wait   = 60000,
+    min_setor     = 1,
     max_hits      = 12,
     delay_min     = 180,
     delay_max     = 300,
@@ -18,7 +19,7 @@ local C = {
 
 local function log_hp(t) log("[" .. SC .. "] " .. tostring(t)) end
 local RUN, ID, home, V = true, {}, {x = 0, y = 0}, {wait = false, dialog = nil, learning = false, rec = {}, dlgs = {}}
-local stats, start_world = {cycles = 0, planted = 0, stocked = 0, setor_count = 0}, ""
+local stats, start_world = {cycles = 0, planted = 0, stocked = 0, setor_count = 0, gain = 0}, ""
 local current_vend_idx = 1
 local pref
 
@@ -163,7 +164,8 @@ local function banner_start()
         "`2VaaaStore - Pabrik rumput otomatis v2.0",
         "`oAlur: Plant > Fast Harvest Ready > Fast 3-Tile PNB > Sweep > Restock 190 Seed.",
         "`oPosisi awal: " .. home.x .. "," .. home.y,
-        "`oSetor Vending: setelah plant, saat seed di tas >= " .. (C.stack_cap - C.plant_count) .. " (seluruh seed di tas disetor).",
+        "`oAlur: Plant > Setor Vending > Harvest > PNB > Sweep.",
+        "`oSetor Vending tiap siklus, sesudah plant (seluruh seed di tas).",
         "`9Mencari Vending baru secara otomatis jika yang sekarang sudah penuh."
     })
 end
@@ -174,6 +176,7 @@ local function banner_stop(reason)
         "`oSiklus selesai: " .. stats.cycles,
         "`oTanaman ditanam: " .. stats.planted,
         "`oTotal Setor Vending: " .. stats.stocked .. " seed (" .. stats.setor_count .. "x setor)",
+        "`oRata-rata seed bersih per siklus: " .. (stats.cycles > 0 and string.format("%.1f", stats.gain / stats.cycles) or "0"),
         "`2Terima kasih sudah memakai VaaaStore."
     })
 end
@@ -529,9 +532,8 @@ local function main()
         guarded(function() list = plant_phase() end)
         if #list == 0 then shutdown("tidak ada tile tanam valid") break end
 
-        local limit = C.stack_cap - C.plant_count
-        if inv(ID.seed) >= limit then
-            log_hp("Seed di tas " .. inv(ID.seed) .. " (>= " .. limit .. ") setelah plant, setor Vending...")
+        if inv(ID.seed) >= C.min_setor then
+            log_hp("Setor " .. inv(ID.seed) .. " seed ke Vending (sebelum harvest)...")
             local ok, why = false, ""
             guarded(function() ok, why = restock() end)
             if not ok then
@@ -539,6 +541,7 @@ local function main()
                 break
             end
         end
+        local seed_base = inv(ID.seed)
 
         guarded(function()
             harvest_as_ready(list)
@@ -548,7 +551,10 @@ local function main()
         end)
 
         stats.cycles = stats.cycles + 1
-        log_hp("Siklus " .. stats.cycles .. " selesai. Seed di tas: " .. inv(ID.seed))
+        local gain = inv(ID.seed) - seed_base
+        stats.gain = stats.gain + gain
+        log_hp("Siklus " .. stats.cycles .. " selesai. Seed di tas: " .. inv(ID.seed) .. " | seed bersih siklus ini: " .. gain)
+        if gain < #list then log_hp("PERINGATAN: seed bersih (" .. gain .. ") < tile tanam (" .. #list .. "), tanaman berikutnya bisa berkurang") end
         pause(500, 1000)
     end
 end
